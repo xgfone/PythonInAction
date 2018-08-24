@@ -50,6 +50,7 @@
 
 ```python
 >>> class A: pass
+...
 >>> a = A()
 >>> a.printf = lambda: "hello"   # 向实例 a 的方法和属性集体中添加一个方法 printf
 >>> print(a.printf())            # 打印字符串 "hello" 到终端上
