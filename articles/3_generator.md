@@ -655,7 +655,7 @@ receive an exception: value error
 ...         try:
 ...             v = yield arg
 ...             if v is not None:
-...                 print('receive the value: %s -> ' % v, end='')
+...                 print('receive a value: %s -> ' % v, end='')
 ...         except Exception as err:
 ...             print('receive an exception: %s -> ' % err, end='')
 ...
@@ -663,7 +663,7 @@ receive an exception: value error
 ...     g = generator(1, 2, 3, 4, 5, 6)
 ...     print(await g.__anext__())  # Output: 1
 ...     print(await g.__anext__())  # Output: 2
-...     print(await g.asend('abc'))  # Output: receive the value: abc -> 3
+...     print(await g.asend('a'))   # Output: receive a value: a -> 3
 ...     print(await g.__anext__())  # Output: 4
 ...     # Output: receive an exception: value error -> 5
 ...     print(await g.athrow(ValueError, ValueError('value error')))
@@ -677,7 +677,7 @@ receive an exception: value error
 >>> loop.run_until_complete(main())
 1
 2
-receive the value: abc -> 3
+receive a value: a -> 3
 4
 receive an exception: value error -> 5
 6
