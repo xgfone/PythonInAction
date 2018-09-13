@@ -232,7 +232,7 @@ PyObject* hello_printf(PyObject* self, PyObject* args)
 ### 6.3.2 函数变方法
 在 CPython 中，其方法类型为 `PyMethodDef`，它有四个成员，分别为：`ml_name`（方法的名字）、`ml_meth`（方法的实现，即一个 Python 函数）、`ml_flags`（标记，即如何调用 Python 函数）、`ml_doc`（方法的文档）。
 
-把 Python 函数变成一个方法，就是重新定义一个 `PyMethodDef` 类型的变量，并填充其四个成员，如：
+把 Python 函数变成一个方法，就是重新定义一个 `PyMethodDef` 类型的变量，并填充其四个成员，如：
 ```c
 static PyMethodDef hello_method = {
     "printf",
