@@ -102,10 +102,12 @@ PyInit_hello(void)
 
 ```c
 #if PY_MAJOR_VERSION < 3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_RETURN(value) return;
 #else
-#define PYTHON3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define PYTHON3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define MOD_INIT_RETURN(value) return value;
 #endif
 ```
 
@@ -115,10 +117,12 @@ PyInit_hello(void)
 #include<Python.h>
 
 #if PY_MAJOR_VERSION < 3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_RETURN(value) return;
 #else
-#define PYTHON3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define PYTHON3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define MOD_INIT_RETURN(value) return value;
 #endif
 
 MOD_INIT_FUNC(hello)
@@ -310,10 +314,12 @@ if (module != NULL) {
 #include<Python.h>
 
 #if PY_MAJOR_VERSION < 3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_RETURN(value) return;
 #else
-#define PYTHON3
-#define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define PYTHON3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define MOD_INIT_RETURN(value) return value;
 #endif
 
 static
@@ -358,4 +364,415 @@ setup(name='hello',
       version='1.0',
       description='This is a hello package',
       ext_modules=[module1])
+```
+
+## 6.4 为扩展模块添加属性
+
+相比添加函数，为 C/C++ 扩展模块添加属性就简单地多了，只须两步即可：
+1. 创建一个 PyObject 对象；
+2. 调用 `PyModule_AddObject` 函数将其添加到模块对象中。
+
+`PyModule_AddObject` 的原型是
+```c
+int PyModule_AddObject(PyObject *module, const char *name, PyObject *value)
+```
+
+下面我们来看一个示例：
+
+```c
+#include<Python.h>
+
+#if PY_MAJOR_VERSION < 3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_RETURN(value) return;
+#else
+#   define PYTHON3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define MOD_INIT_RETURN(value) return value;
+#endif
+
+MOD_INIT_FUNC(hello)
+{
+    PyObject *module = NULL;
+
+#ifndef PYTHON3
+    module = Py_InitModule("hello", NULL);
+#else
+    static struct PyModuleDef hello = {
+        PyModuleDef_HEAD_INIT,
+
+        .m_name = "hello",
+        .m_size = -1,
+    };
+    module = PyModule_Create(&hello);
+#endif
+
+    PyModule_AddObject(module, "intattr", PyLong_FromLong(123));
+    PyModule_AddObject(module, "strattr", PyUnicode_FromString("abc"));
+
+    MOD_INIT_RETURN(module)
+}
+```
+
+如果属性值是一个整数或字符串常量，可以分别使用函数 `PyModule_AddIntConstant` 或 `PyModule_AddStringConstant` 为模块添加属性。其原型分别是
+```c
+int PyModule_AddIntConstant(PyObject *module, const char *name, long value)
+int PyModule_AddStringConstant(PyObject *module, const char *name, const char *value)
+```
+
+所以，我们也可以这样添加一个整数常量或字符串常量：
+
+```c
+PyModule_AddIntConstant(module, "intattr", 123);
+PyModule_AddStringConstant(module, "strattr", "abc");
+```
+
+## 6.5 为扩展模块添加一个新类型
+
+定义一个新的 Python 类型，可以分为以下几个步骤：
+1. 定义一个存放新类型数据的结构体 `struct`；
+2. 定义新类型对象（它是元类的一个实例）；
+3. 调用 `PyModule_AddObject` 函数把新类型对象添加到模块中。
+
+下面我们添加一个新类型 `Person`。
+
+**第一步：** 定义一个存放新类型数据的结构体。
+
+```c
+typedef struct {
+    PyObject_HEAD
+    PyObject *name;
+    long age;
+} PersonObject;
+```
+
+**第二步：** 定义新类型对象。
+
+```c
+static PyObject *
+Person_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
+{
+    PersonObject *self;
+
+    self = (PersonObject*)type->tp_alloc(type, 0);
+    if (self != NULL) {
+        self->name = PyUnicode_FromString("");
+        if (self->name == NULL) {
+            Py_DECREF(self);
+            return NULL;
+        }
+        self->age = 0;
+    }
+
+    return (PyObject*)self;
+}
+
+static int
+Person_init(PersonObject *self, PyObject *args, PyObject *kwargs)
+{
+    static char *kwlist[] = {"name", "age", NULL};
+    PyObject *name = NULL, *tmp = NULL;
+    int ok = 0;
+
+    ok = PyArg_ParseTupleAndKeywords(args, kwargs, "|Ul", kwlist,
+                                     &name, &self->age);
+    if (!ok) {
+        return -1;
+    }
+
+    if (name) {
+        tmp = self->name;
+        Py_INCREF(name);
+        self->first = name;
+        Py_XDECREF(tmp);
+    }
+
+    return 0;
+}
+
+static void
+Person_dealloc(PersonObject *self)
+{
+    Py_XDECREF(self->name);
+    Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+static PyTypeObject PersonType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "hello.Person",
+    .tp_doc = "Person object",
+    .tp_basicsize = sizeof(PersonObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_new = Person_new,
+    .tp_init = (initproc)Person_init,
+    .tp_dealloc = (destructor)Person_dealloc,
+};
+```
+
+注意，`Py_TPFLAGS_BASETYPE` 标志意味着此类 `Person` 能被其它类继承；如果没有此位，它就不能被继承。
+
+**第三步：** 调用 `PyModule_AddObject` 函数把 `PersonType` 添加到模块 `hello` 中。如：
+
+```c
+Py_INCREF(&PersonType);
+PyModule_AddObject(module, "Person", (PyObject *) &PersonType);
+```
+
+### 6.5.1 为新类型添加属性
+
+`PyTypeObject` 类型有一个成员属性 `tp_members`，我们只要为其赋个值（即 `PyMemberDef` 类型的数组），其中包含可以访问的属性即可。
+
+`PyMemberDef` 结构有五个成员：`name`（属性名）、`type`（属性值的类型）、`offset`（属性在类型结构体中的偏移量，以字节为单位）、`flags`（读写标志）、`doc`（属性的文档说明）。
+
+关于 `type`，请具体参见 Python 的 [C API 文档](https://docs.python.org/3/c-api/structures.html#c.PyMemberDef)。
+
+对于 `flags`，如果设为 `READONLY`，则该属性只能读取，不能修改；如果设为 `0`，表示既可以读取也可以修改。如果属性的类型 `type` 为 `T_STRING`（表示常量字符串），则 `flags` 会变为 `READONLY`（因为常量值不能被修改）。另外，只有当属性的类型 `type` 为 `T_OBJECT` 或 `T_OBJECT_EX` 时，才会允许删除属性，之后它们的值会被设为 `NULL`；此时，访问 `type` 为 `T_OBJECT` 的属性会返回 `None`，而访问 `type` 为 `T_OBJECT_EX` 的属性，则会抛出 `AttributeError` 异常。
+
+有了这些，我们可以定义两个属性用来访问实例对象内部的信息。如：
+
+```c
+static PyMemberDef Person_members[] = {
+    {
+        "name",
+        T_OBJECT_EX,
+        offsetof(PersonObject, name),
+        0,
+        "person name",
+    },
+    {NULL} // Sentinel
+};
+
+static PyTypeObject PersonType = {
+    // ...
+    .tp_members = Person_members,
+};
+```
+
+注意，当使用 `PyMemberDef` 结构体类型时，必须先包含头文件 `structmember.h`，如 `#include<structmember.h>`。
+
+### 6.5.2 为新类型添加方法
+
+为新类型添加方法的方式和步骤，与模块的相似，不同的是：（1）把模块对象换成新类型对象，（2）把方法集赋值到新类型的 `tp_methods` 成员。
+
+第一步：先定义 Python C 函数。如：
+
+```c
+static
+PyObject* Person_get_age(PersonObject* self, PyObject* Py_UNUSED(ignored))
+{
+    return PyLong_FromLong(self->age);
+}
+```
+
+注意，由于我们的方法不需要参数，所以，这里我们可以明确告诉 Python 解析器忽略后面的参数。
+
+第二步：定义一个方法集（即方法数组）变量。如：
+
+```c
+static PyMethodDef Person_methods[] = {
+    {
+        "get_age",
+        (PyCFunction)Person_get_age,
+        METH_NOARGS,
+        "Return the age of the person.",
+    },
+    {NULL} // Sentinel
+};
+```
+
+第三步：添加方法集到新类型的 `tp_methods` 成员。如：
+
+```c
+static PyTypeObject PersonType = {
+    // ...
+    .tp_methods = Person_methods,
+};
+```
+
+### 6.5.3 控制新类型属性访问
+
+在 CPython 中，我们仍可以像在 Python 代码中一样来控制类实例属性的访问，而且也有多种方式。这里我们先讲解一下类似于 `property` 的属性控制，即 `tp_getset` 成员，它是一个 `PyGetSetDef` 类型的数组。
+
+`PyGetSetDef` 有五个成员：`name`（属性的名字）、`get`（类似于 `property` 中的 `fget`）、`set`（类似于 `property` 中的 `fset`）、`doc`（可选的文档）、`closure`（可选，为 `get` 和 `set` 提供额外的数据）。
+
+`get` 和 `set` 均是一个 C 函数，其原型分别是
+```c
+typedef PyObject *(*getter)(PyObject *instance, void *func);
+typedef int (*setter)(PyObject *instance, PyObject *new_value, void *func);
+```
+其中，参数 `instance` 是新类型的实例对象，`func` 是 `closure` 的值，`new_value` 是将要设置的新的属性值，如果它为 `NULL`，表示一个删除操作。
+
+定义新类型实例的属性访问的方式，和定义属性很相似。我们假定新类型中包含一个名为 `id` 的属性，下面我们实现属性 `id` 的访问控制：实例创建后，只允许获取其值，但不允许修改其值。
+
+```c
+static PyObject *
+Person_getid(PersonObject *self, void *closure)
+{
+    return PyLong_FromLong(self->id);
+}
+
+static PyGetSetDef Person_getsetters[] = {
+    {"id", (getter)Person_getid, NULL, "get id", NULL},
+    {NULL}  /* Sentinel */
+};
+
+static PyTypeObject PersonType = {
+    // ...
+    .tp_getset = Person_getsetters,
+};
+```
+
+注意，如果某个属性已在 `tp_members` 中定义，则在 `tp_getset` 中再次定义将会无效，因为 Python 解析器会优先使用 `tp_members` 成员中的定义。
+
+### 6.5.4 完整示例
+
+```c
+#include<Python.h>
+#include<structmember.h>
+
+#if PY_MAJOR_VERSION < 3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#   define MOD_INIT_RETURN(value) return;
+#else
+#   define PYTHON3
+#   define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#   define MOD_INIT_RETURN(value) return value;
+#endif
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *name;
+    long age;
+    long id;
+} PersonObject;
+
+static PyObject *
+Person_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
+{
+    PersonObject *self;
+
+    self = (PersonObject*)type->tp_alloc(type, 0);
+    if (self != NULL) {
+        self->name = PyUnicode_FromString("");
+        if (self->name == NULL) {
+            Py_DECREF(self);
+            return NULL;
+        }
+        self->age = 0;
+        self->id = 0;
+    }
+
+    return (PyObject*)self;
+}
+
+static int
+Person_init(PersonObject *self, PyObject *args, PyObject *kwargs)
+{
+    static char *kwlist[] = {"id", "name", "age", NULL};
+    PyObject *name = NULL, *tmp = NULL;
+    int ok = 0;
+
+    ok = PyArg_ParseTupleAndKeywords(args, kwargs, "l|Ul", kwlist,
+                                     &self->id, &name, &self->age);
+    if (!ok) {
+        return -1;
+    }
+
+    if (name) {
+        tmp = self->name;
+        Py_INCREF(name);
+        self->name = name;
+        Py_XDECREF(tmp);
+    }
+
+    return 0;
+}
+
+static void
+Person_dealloc(PersonObject *self)
+{
+    Py_XDECREF(self->name);
+    Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+static PyObject *
+Person_getid(PersonObject *self, void *closure)
+{
+    return PyLong_FromLong(self->id);
+}
+
+static PyGetSetDef Person_getsetters[] = {
+    {"id", (getter)Person_getid, NULL, "id", NULL},
+    {NULL}  /* Sentinel */
+};
+
+static
+PyObject* Person_get_age(PersonObject* self, PyObject* Py_UNUSED(ignored))
+{
+    return PyLong_FromLong(self->age);
+}
+
+static PyMethodDef Person_methods[] = {
+    {
+        "get_age",
+        (PyCFunction)Person_get_age,
+        METH_NOARGS,
+        "Return the age of the person.",
+    },
+    {NULL} // Sentinel
+};
+
+static PyMemberDef Person_members[] = {
+    {
+        "name",
+        T_OBJECT_EX,
+        offsetof(PersonObject, name),
+        0,
+        "person name",
+    },
+    {NULL} // Sentinel
+};
+
+static PyTypeObject PersonType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "hello.Person",
+    .tp_doc = "Person object",
+    .tp_basicsize = sizeof(PersonObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_new = Person_new,
+    .tp_init = (initproc)Person_init,
+    .tp_dealloc = (destructor)Person_dealloc,
+    .tp_members = Person_members,
+    .tp_methods = Person_methods,
+    .tp_getset = Person_getsetters,
+};
+
+MOD_INIT_FUNC(hello)
+{
+    PyObject *module = NULL;
+
+    if (PyType_Ready(&PersonType) < 0) {
+        MOD_INIT_RETURN(NULL)
+    }
+
+#ifndef PYTHON3
+    module = Py_InitModule("hello", NULL);
+#else
+    static struct PyModuleDef hello = {
+        PyModuleDef_HEAD_INIT,
+
+        .m_name = "hello",
+        .m_size = -1,
+    };
+    module = PyModule_Create(&hello);
+#endif
+
+    // Add the class Person into the module.
+    PyModule_AddObject(module, "Person", (PyObject *) &PersonType);
+    Py_INCREF(&PersonType);
+
+    MOD_INIT_RETURN(module)
+}
 ```
