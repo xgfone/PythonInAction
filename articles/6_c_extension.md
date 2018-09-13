@@ -100,7 +100,7 @@ PyInit_hello(void)
 
 为了便捷，我们可以定义如下几个宏：
 
-```python
+```c
 #if PY_MAJOR_VERSION < 3
 #define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
 #else
@@ -111,7 +111,7 @@ PyInit_hello(void)
 
 我们现在来改写一下上述 C 模块（假定其文件名为 `hello.c`）：
 
-```python
+```c
 #include<Python.h>
 
 #if PY_MAJOR_VERSION < 3
@@ -183,3 +183,179 @@ $ python setup.py build
 ```
 
 运行结束后，在当前目录下就会出现一个 `build` 目录，最终构建出来的 Python 模块就位于其中；对于不同的平台、不同的 Python 版本，最终生成的 Python 模块名可以略有不同，但是仍然可以直接通过 `import hello` 来导入。
+
+
+## 6.3 为扩展模块添加函数
+
+在 Python 的模块中，定义一个函数，就相当于在这个模块中做一个赋值操作，其中，变量名为函数的名字，赋的值就是所定义的函数。
+
+因此，在 C/C++ 扩展模块中，给模块添加一个函数，其步骤分解为：
+1. 定义一个 Python C 函数；
+2. 将 Python C 函数包装成一个方法（对于模块而言，它就相对于一个方法）；
+3. 将该方法添加到模块中。
+
+### 6.3.1 定义 C 函数
+
+Python C 函数的原型有三种：
+```c
+PyObject* (FUNCTION_NAME)(PyObject *self)
+PyObject* (FUNCTION_NAME)(PyObject *self, PyObject *args)
+PyObject* (FUNCTION_NAME)(PyObject *self, PyObject *args, PyObject *kwargs)
+```
+
+至于是哪种原型，这依赖于函数的具体调用方式（依赖于方法的标志，见下一小节）：第一种是无参数（`METH_NOARGS`）调用，第二种是只有位置参数（`METH_VARARGS`）调用，第三种有位置参数（`METH_VARARGS`）和关键字参数（`METH_KEYWORDS`）调用。但是对于第一个参数 `self`，在 Python 2 中，它 `None` 对象；在 Python 3 中，它是当前的模块对象。
+
+如果返回值为 `NULL`，一个异常应当被设置，此时当执行流程再次返回到 Python 运行时，就会抛出此异常。如果不想返回任何值（就像没有 `return` 语句的 Python 函数），可以返回 `Py_None`（即 Python 中的 `None`）。总之，如果返回值不是 NULL，它就会被作为函数的返回值返回给调用者。但是，要注意，这个返回值必须是一个新引用（A New Reference），即返回值如果不是新创建的，就要使用 `Py_INCREF` 宏增加其引用计数，以避免被 GC 回收。
+
+下面我们来实现一个 Python C 函数，它将打印 `"hello, world"`。
+
+```c
+static
+PyObject* hello_printf(PyObject* self, PyObject* args)
+{
+    // Print "hello, world" to stdout.
+    PySys_WriteStdout("hello, world\n");
+
+    // return None
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+```
+
+注意，在定义 Python C 函数时，如非特殊，一般建议将其定义为 `static`，此时该函数的作用域就会被限定在此源码文件中，不会与其它文件中的函数名发生冲突。
+
+
+### 6.3.2 函数变方法
+在 CPython 中，其方法类型为 `PyMethodDef`，它有四个成员，分别为：`ml_name`（方法的名字）、`ml_meth`（方法的实现，即一个 Python 函数）、`ml_flags`（标记，即如何调用 Python 函数）、`ml_doc`（方法的文档）。
+
+把 Python 函数变成一个方法，就是重新定义一个 `PyMethodDef` 类型的变量，并填充其四个成员，如：
+```c
+static PyMethodDef hello_method = {
+    "printf",
+    (PyCFunction)hello_printf,
+    METH_NOARGS, // call printf without arguments
+    "Print the hello world.",
+};
+```
+
+#### 6.3.2.1 方法标志
+
+不管任何方法标志，三种函数接口原型都可以使用，但对参数的使用要求有些区别。
+
+下面我们来介绍一下方法的标志是如何影响 Python C 函数接口以及调用的。
+
+`METH_NOARGS` 表示以无任何参数调用函数，第二个参数 `args` 始终为 NULL，而第三个参数 `kwargs` 不能在函数体中访问，否则将可能出现段错误。
+
+`METH_VARARGS` 表示只能以位置参数的方式调用函数（位置参数可以为空），而且，第二个参数 `args` 的类型是一个元组。但对于第三个参数 `kwargs`，在 Python 2 和 3 中却略有不同：在 Python 2 中，该参数不能访问，否则将可能出现段错误；在 Python 3 中，它为 `NULL`。
+
+`METH_KEYWORDS` 表示可以以位置参数和关键字参数的方式调用函数，并且，第二个参数 `args` 的类型是元组，第三个参数 `kwargs` 的类型是字典。
+
+因此，为了兼容性，在定义 Python C 函数时，均可以使用最后一种原型。但在函数体中，对于无参数调用，不要访问后两个参数；对于仅位置参数调用，不要访问最后一个参数。
+
+
+### 6.3.3 添加方法到模块
+注意，当把方法添加到模块中时，不是一个一个地添加，而是所有的方法作为一个方法集（即数组）一起被添加进去。所以，方法集可以写作：
+```c
+static PyMethodDef hello_methods[] = {
+    {
+        "printf",
+        (PyCFunction)hello_printf,
+        METH_NOARGS, // call printf without arguments
+        "Print the hello world.",
+    },
+    {NULL} // it's said to end.
+};
+```
+
+在 Python 2 中，当调用 `Py_InitModule` 系列函数初始化模块时，可以为该模块指定相应的模块方法。如：
+```c
+Py_InitModule('hello', hello_methods);
+```
+
+但是在 Python 3 中，我们须要明确地定义一个模块类型的变量，因此，可以在该变量的方法字段中指明，如：
+```c
+static struct PyModuleDef hello = {
+    PyModuleDef_HEAD_INIT,
+
+    .m_name = "hello",
+    .m_size = -1,
+    .m_methods = hello_methods,
+};
+```
+
+从 3.5 版本开始，Python 支持多阶段模块创建。也即是，原本的模块创建是一步到位，现在可以将其分多步进行，就像创建对象时可以分成 `__new__` 和 `__init__` 两步一样。为了支持多阶段模块创建，CPython 添加了一个 C/C++ 方法 `PyModule_AddFunctions`，它可以为已经创建好的模块再次添加方法集，其原型为
+```c
+int PyModule_AddFunctions(PyObject *module, PyMethodDef *methods)
+```
+
+在 3.5 版本以后，我们也可以这样写：
+```c
+static struct PyModuleDef hello = {
+    PyModuleDef_HEAD_INIT,
+
+    .m_name = "hello",
+    .m_size = -1,
+};
+PyObject *module = PyModule_Create(&hello);
+if (module != NULL) {
+    PyModule_AddFunctions(module, hello_methods);
+}
+```
+
+### 6.3.4 完整示例：
+
+```c
+// hello.c
+
+#include<Python.h>
+
+#if PY_MAJOR_VERSION < 3
+#define MOD_INIT_FUNC(name) PyMODINIT_FUNC init##name(void)
+#else
+#define PYTHON3
+#define MOD_INIT_FUNC(name) PyMODINIT_FUNC PyInit_##name(void)
+#endif
+
+static
+PyObject* hello_printf(PyObject* self, PyObject* args, PyObject *kwargs)
+{
+    // Print "hello, world" to stdout.
+    PySys_WriteStdout("hello, world\n");
+
+    // return None
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+static PyMethodDef hello_methods[] = {
+    {"printf", (PyCFunction)hello_printf, METH_NOARGS, "Print the hello world."},
+    {NULL},  // denote the end of the method set.
+};
+
+MOD_INIT_FUNC(hello)
+{
+#ifndef PYTHON3
+    (void)Py_InitModule("hello", hello_methods);
+#else
+    static struct PyModuleDef hello = {
+        PyModuleDef_HEAD_INIT,
+
+        .m_name = "hello",
+        .m_size = -1,
+        .m_methods = hello_methods,
+    };
+    return PyModule_Create(&hello);
+#endif
+}
+```
+
+```python
+from distutils.core import setup, Extension
+
+module1 = Extension('hello', sources=['hello.c'])
+
+setup(name='hello',
+      version='1.0',
+      description='This is a hello package',
+      ext_modules=[module1])
+```
