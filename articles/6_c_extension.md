@@ -565,7 +565,7 @@ PyObject* Person_get_age(PersonObject* self, PyObject* Py_UNUSED(ignored))
 }
 ```
 
-注意，由于我们的方法不需要参数，所以，这里我们可以明确告诉 Python 解析器忽略后面的参数。
+注意，由于我们的方法不需要参数，所以，这里我们可以明确告诉 Python 解析器忽略后面的参数。但是，这在 Python 2 下会出错编译警告或错误；所以，这个 `Py_UNUSED` 宏尽量只在 Python 3 下使用，不要在 Python 2 用。为了兼容 Python 2 和 3，就不要使用 `Py_UNUSED` 了。
 
 第二步：定义一个方法集（即方法数组）变量。如：
 
@@ -778,6 +778,7 @@ Person_init(PersonObject *self, PyObject *args, PyObject *kwargs)
 static void
 Person_dealloc(PersonObject *self)
 {
+    PySys_WriteStdout("deallocate %ld\n", self->id);
     Py_XDECREF(self->name);
     Py_XDECREF(self->next);
     Py_TYPE(self)->tp_free((PyObject*)self);
@@ -809,7 +810,7 @@ static PyGetSetDef Person_getsetters[] = {
 };
 
 static
-PyObject* Person_get_age(PersonObject* self, PyObject* Py_UNUSED(ignored))
+PyObject* Person_get_age(PersonObject* self, PyObject* ignored)
 {
     return PyLong_FromLong(self->age);
 }
@@ -886,4 +887,28 @@ MOD_INIT_FUNC(hello)
 
     MOD_INIT_RETURN(module)
 }
+```
+
+在上述示例中，我们加入一条调试语句 `PySys_WriteStdout("deallocate %ld\n", self->id);`。然后，我们编译后，会生成一个 `hello` 模块。这样，我们就可以使用它了。
+
+```python
+>>> import hello
+>>> p = hello.Person(1, name=u'Aaron', age=18)
+>>> p.name
+Aaron
+>>> p.get_age()
+18
+>>> print(p.next)
+None
+>>> q = hello.Person(2, name=u'John', age=28, next=p)
+>>> q.next is p
+True
+>>> p.next = q
+>>> del p  # delete the variable p
+>>> del q  # delete the variable q
+>>> import gc
+>>> gc.collect()  # run GC to free p & q
+deallocate 2
+deallocate 1
+2
 ```
