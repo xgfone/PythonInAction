@@ -603,7 +603,7 @@ typedef int (*setter)(PyObject *instance, PyObject *new_value, void *func);
 ```
 其中，参数 `instance` 是新类型的实例对象，`func` 是 `closure` 的值，`new_value` 是将要设置的新的属性值，如果它为 `NULL`，表示一个删除操作。
 
-定义新类型实例的属性访问的方式，和定义属性很相似。我们假定新类型中包含一个名为 `id` 的属性，下面我们实现属性 `id` 的访问控制：实例创建后，只允许获取其值，但不允许修改其值。
+定义新类型实例的属性访问的方式，和定义属性很相似。我们假定新类型中包含一个名为 `id` 的属性，下面我们来实现属性 `id` 的访问控制：实例创建后，只允许获取其值，但不允许修改其值。
 
 ```c
 static PyObject *
@@ -625,7 +625,83 @@ static PyTypeObject PersonType = {
 
 注意，如果某个属性已在 `tp_members` 中定义，则在 `tp_getset` 中再次定义将会无效，因为 Python 解析器会优先使用 `tp_members` 成员中的定义。
 
-### 6.5.4 完整示例
+
+### 6.5.4 支持循环垃圾收集器 CGC
+
+Python 是一门自带垃圾回收（GC）的动态语言，它可以互相引用，甚至是自身引用自身，从而可能会导致循环引用。默认情况下，GC 无法侦测循环引用，这就是须要我们帮助 GC 来侦测它，从而使得 GC 可以做到处理循环引用的情况：当引用只剩下循环引用时，GC 就会回收它。这就是 CGC。
+
+为了支持 CGC，很简单，只须完成四步即可：
+1. 定义一个 `traverse` 方法；
+2. 定义一个 `clear` 方法；
+3. 在新类型的标志中添加 `Py_TPFLAGS_HAVE_GC`。
+
+我们假定新类型中含有一个 `next` 属性，它可以是任何类型的值，所以它可能引用它自身，从而导致循环引用。下面我们实现对 CGC 的支持。
+
+#### 6.5.4.1 定义 `traverse` 方法
+
+`traverse` 方法的原型是
+```c
+int (PyObject *self, visitproc visit, void *arg)
+```
+
+如果 `traverse` 方法返回 `0`，表示没有循环引用；否则，就表示发生了循环引用。
+
+`traverse` 方法的原理也很简单，就是把可以出现循环引用的字段（这里是 `next`）依次和第三个参数 `arg` 传递给第二个参数 `visit` 函数，以此根据它的返回值判断某个字段是否发生了循环引用：如果是 `0`，则说明该字段未发生循环引用；否则就是发生了循环引用。
+
+只要有一次调用 `visit` 的返回值不是 `0`，`traverse` 就可以直接返回其值，以表明发生了循环引用；否则返回 `0` 即可。如：
+
+```c
+static int
+Person_traverse(PersonObject *self, visitproc visit, void *arg)
+{
+    int vret;
+    if (self->next) {
+        vret = visit(self->next, arg);
+        if (vret != 0)
+            return vret;
+    }
+    return 0;
+}
+```
+
+为了方便，CPython 标准头文件中已经内建了便捷宏 `Py_VISIT()`，我们只要将第二、三个参数的名字分别命名为 `visit` 和 `arg` 即可。如：
+```c
+static int
+Person_traverse(PersonObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(self->next);
+    return 0;
+}
+```
+
+最终，将 `Person_traverse` 新类型的 `tp_traverse` 字段成员即可。
+
+#### 6.5.4.2 定义 `clear` 方法
+
+当发生循环引用，我们就须要打破这个环，清除循环引用链中的对象，即哪些属性会发生循环引用，就要清除哪些属性的值。`clear` 方法就是做这个事情的。如：
+
+```c
+static int
+Person_clear(PersonObject *self)
+{
+    Py_CLEAR(self->next);
+    return 0;
+}
+```
+
+注意，原本我们也可以直接使用 `Py_DECREF` 或 `Py_XDECREF` 来清除引用，但这并不是很安全。为了能更安全的清除循环引用的对象，CPython 内建宏 `Py_CLEAR` 来做这件事情。建议：始终使用宏 `Py_CLEAR`。
+
+最终，将 `Person_clear` 新类型的 `tp_clear` 字段成员即可。
+
+#### 6.5.4.3 添加新标志 `Py_TPFLAGS_HAVE_GC`
+
+这一步比较简单，在新类型定义时，在 `tp_flags` 字段处增加 `Py_TPFLAGS_HAVE_GC` 标志即可。如：
+```c
+.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+```
+
+
+## 6.6 完整示例
 
 ```c
 #include<Python.h>
@@ -642,6 +718,7 @@ static PyTypeObject PersonType = {
 
 typedef struct {
     PyObject_HEAD
+    PyObject *next;
     PyObject *name;
     long age;
     long id;
@@ -659,6 +736,7 @@ Person_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
             Py_DECREF(self);
             return NULL;
         }
+        self->next = NULL;
         self->age = 0;
         self->id = 0;
     }
@@ -669,12 +747,13 @@ Person_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
 static int
 Person_init(PersonObject *self, PyObject *args, PyObject *kwargs)
 {
-    static char *kwlist[] = {"id", "name", "age", NULL};
-    PyObject *name = NULL, *tmp = NULL;
+    static char *kwlist[] = {"id", "name", "age", "next", NULL};
+    PyObject *name = NULL, *tmp = NULL, *next = NULL;
     int ok = 0;
 
-    ok = PyArg_ParseTupleAndKeywords(args, kwargs, "l|Ul", kwlist,
-                                     &self->id, &name, &self->age);
+    ok = PyArg_ParseTupleAndKeywords(args, kwargs, "l|UlO", kwlist,
+                                     &self->id, &name, &self->age,
+                                     &next);
     if (!ok) {
         return -1;
     }
@@ -686,6 +765,13 @@ Person_init(PersonObject *self, PyObject *args, PyObject *kwargs)
         Py_XDECREF(tmp);
     }
 
+    if (next) {
+        tmp = self->next;
+        Py_INCREF(next);
+        self->next = next;
+        Py_XDECREF(tmp);
+    }
+
     return 0;
 }
 
@@ -693,7 +779,22 @@ static void
 Person_dealloc(PersonObject *self)
 {
     Py_XDECREF(self->name);
+    Py_XDECREF(self->next);
     Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+static int
+Person_traverse(PersonObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(self->next);
+    return 0;
+}
+
+static int
+Person_clear(PersonObject *self)
+{
+    Py_CLEAR(self->next);
+    return 0;
 }
 
 static PyObject *
@@ -730,6 +831,12 @@ static PyMemberDef Person_members[] = {
         offsetof(PersonObject, name),
         0,
         "person name",
+    },{
+        "next",
+        T_OBJECT,
+        offsetof(PersonObject, next),
+        0,
+        "next person",
     },
     {NULL} // Sentinel
 };
@@ -740,10 +847,14 @@ static PyTypeObject PersonType = {
     .tp_doc = "Person object",
     .tp_basicsize = sizeof(PersonObject),
     .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_flags = Py_TPFLAGS_DEFAULT | \
+                Py_TPFLAGS_BASETYPE | \
+                Py_TPFLAGS_HAVE_GC,
     .tp_new = Person_new,
     .tp_init = (initproc)Person_init,
     .tp_dealloc = (destructor)Person_dealloc,
+    .tp_traverse = (traverseproc)Person_traverse,
+    .tp_clear = (inquiry)Person_clear,
     .tp_members = Person_members,
     .tp_methods = Person_methods,
     .tp_getset = Person_getsetters,
