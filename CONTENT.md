@@ -2,12 +2,12 @@
 
 - 前言
 - 第一部分 语言精讲
-    - 第 1 章 类型、实例和变量
-    - 第 2 章 属性管理
-    - 第 3 章 产生器 Generator
-    - 第 4 章 装饰器 Decorator
-    - 第 5 章 元类 MetaClass
-    - 第 6 章 C/C++ 扩展
+    - [第 1 章 类型、实例和变量](./articles/1_type_variables.md)
+    - [第 2 章 属性管理](./articles/2_attribute_management.md)
+    - [第 3 章 产生器 Generator](./articles/3_generator.md)
+    - [第 4 章 装饰器 Decorator](./articles/4_decorator.md)
+    - [第 5 章 元类 MetaClass](./articles/5_metaclass.md)
+    - [第 6 章 C/C++ 扩展](./articles/6_c_extension.md)
 - 第二部分 库
     - 第 7 章 配置管理
     - 第 8 章 熔断与速率控制
